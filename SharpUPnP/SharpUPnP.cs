@@ -27,20 +27,34 @@ namespace SharpUPnP
             }
         }
 
-        private static string descUrl { get; private set; }
-        private static string serviceUrl { get; private set; }
-        private static string eventUrl { get; private set; }
+        private static string descUrl { get; set; }
+        private static string serviceUrl { get; set; }
+        private static string eventUrl { get; set; }
 
         private static object discoveryLock = new object();
+        /// <summary>
+        /// Gets or sets a value indicating whether an ettempy has been made to Discover UPnP services
+        /// </summary>
+        /// <value><c>true</c> if discovered; otherwise, <c>false</c>.</value>
         public static bool Discovered
         {
             get;
             private set;
         }
+
+        private static bool uPnPAvailable = false;
+        /// <summary>
+        /// Gets or sets a value indicating whether any UPnP services are available.
+        /// </summary>
+        /// <value><c>true</c> if UPnP is available; False if UPnP is unavailable</value>
         public static bool UPnPAvailable
         {
-            get;
-            private set;
+            get
+            {
+                Discover(false);
+
+                return uPnPAvailable;
+            }
         }
 
         /// <summary>
@@ -51,9 +65,15 @@ namespace SharpUPnP
         public static bool Discover(bool rediscover)
         {
             if (!Discovered || rediscover)
-                return Discover();
-            else
-                return UPnPAvailable;
+            {
+                lock (discoveryLock)
+                {
+                    if (!Discovered || rediscover)
+                        return Discover();
+                }
+            }
+
+            return uPnPAvailable;
         }
 
         /// <summary>
@@ -102,10 +122,10 @@ namespace SharpUPnP
                     if (!string.IsNullOrEmpty(serviceUrl = GetServiceUrl(resp)))
                     {
                         descUrl = resp;
-                        UPnPAvailable = true;
+                        uPnPAvailable = true;
                     }
                 }
-                UPnPAvailable = false;
+                uPnPAvailable = false;
 
                 Discovered = true;
                 return UPnPAvailable;
