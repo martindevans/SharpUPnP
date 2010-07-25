@@ -206,8 +206,7 @@ namespace SharpUPnP
         /// <exception cref="UPnPException">Thrown if no UPnP service is available</exception>
         public static IPAddress GetExternalIP()
         {
-            XmlDocument xdoc = SOAPRequest("<u:GetExternalIPAddress xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
-            "</u:GetExternalIPAddress>", "GetExternalIPAddress");
+            XmlDocument xdoc = SOAPRequest("<u:GetExternalIPAddress xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\"></u:GetExternalIPAddress>", "GetExternalIPAddress");
             XmlNamespaceManager nsMgr = new XmlNamespaceManager(xdoc.NameTable);
             nsMgr.AddNamespace("tns", "urn:schemas-upnp-org:device-1-0");
             string IP = xdoc.SelectSingleNode("//NewExternalIPAddress/text()", nsMgr).Value;
