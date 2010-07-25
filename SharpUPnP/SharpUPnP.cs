@@ -1,66 +1,114 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Net.Sockets;
-using System.Net;
-using System.Xml;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Xml;
 
 namespace SharpUPnP
 {
+    /// <summary>
+    /// Provides Universal Plug & Play operations for NAT
+    /// </summary>
     public class SharpUPnP
     {
-        static TimeSpan _timeout = new TimeSpan(0, 0, 0, 3);
+        private static long timeoutTicks = new TimeSpan(0, 0, 0, 3).Ticks;
+        /// <summary>
+        /// The default timeout to use for operations. Threadsafe for reading and writing
+        /// </summary>
         public static TimeSpan TimeOut
         {
-            get { return _timeout; }
-            set { _timeout = value; }
+            get { return new TimeSpan(Interlocked.Read(ref timeoutTicks)); }
+            set
+            {
+                Interlocked.Exchange(ref timeoutTicks, value.Ticks);
+            }
         }
-        public static string _descUrl, _serviceUrl, _eventUrl;
+
+        public static string DescUrl { get; private set; }
+        public static string ServiceUrl { get; private set; }
+        public static string EventUrl { get; private set; }
+
+        private static object discoveryLock = new object();
+        public static bool Discovered
+        {
+            get;
+            private set;
+        }
+        public static bool UPnPAvailable
+        {
+            get;
+            private set;
+        }
+
+        /// <summary>
+        /// Discover if UPnP services are available
+        /// </summary>
+        /// <param name="rediscover">Indicates if discovery should be tried again if it has already been done</param>
+        /// <returns>True, if UPnP servivesare available, otherwise false</returns>
+        public static bool Discover(bool rediscover)
+        {
+            if (!Discovered || rediscover)
+                return Discover();
+            else
+                return UPnPAvailable;
+        }
+
+        /// <summary>
+        /// Discover available UPnP services available
+        /// </summary>
+        /// <returns>True, if UPnP servivesare available, otherwise false</returns>
         public static bool Discover()
         {
-            System.Net.NetworkInformation.NetworkInterface nic = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()[0];
-
-            System.Net.NetworkInformation.GatewayIPAddressInformation gwInfo = nic.GetIPProperties().GatewayAddresses[0];
-            Socket s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
-            string req = "M-SEARCH * HTTP/1.1\r\n" +
-            "HOST: " + gwInfo.Address.ToString() + ":1900\r\n" +
-            "ST:upnp:rootdevice\r\n" +
-            "MAN:\"ssdp:discover\"\r\n" +
-            "MX:3\r\n\r\n";
-            Socket client = new Socket(AddressFamily.InterNetwork,
-                SocketType.Dgram, ProtocolType.Udp);
-            IPEndPoint endPoint = new
-            IPEndPoint(IPAddress.Parse(gwInfo.Address.ToString()), 1900);
-
-            client.SetSocketOption(SocketOptionLevel.Socket,
-                SocketOptionName.ReceiveTimeout, 5000);
-
-            byte[] q = Encoding.ASCII.GetBytes(req);
-            client.SendTo(q, q.Length, SocketFlags.None, endPoint);
-            IPEndPoint sender = new IPEndPoint(IPAddress.Any, 0);
-            EndPoint senderEP = (EndPoint)sender;
-
-            byte[] data = new byte[1024];
-            int recv = client.ReceiveFrom(data, ref senderEP);
-            string queryResponse = "";
-            queryResponse = Encoding.ASCII.GetString(data);
-
-            DateTime start = DateTime.Now;
-
-            string resp = queryResponse;
-            if (resp.Contains("upnp:rootdevice"))
+            lock (discoveryLock)
             {
-                resp = resp.Substring(resp.ToLower().IndexOf("location:") + 9);
-                resp = resp.Substring(0, resp.IndexOf("\r")).Trim();
-                if (!string.IsNullOrEmpty(_serviceUrl = GetServiceUrl(resp)))
+                System.Net.NetworkInformation.NetworkInterface nic = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()[0];
+
+                System.Net.NetworkInformation.GatewayIPAddressInformation gwInfo = nic.GetIPProperties().GatewayAddresses[0];
+                Socket s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
+                string req = "M-SEARCH * HTTP/1.1\r\n" +
+                "HOST: " + gwInfo.Address.ToString() + ":1900\r\n" +
+                "ST:upnp:rootdevice\r\n" +
+                "MAN:\"ssdp:discover\"\r\n" +
+                "MX:3\r\n\r\n";
+                Socket client = new Socket(AddressFamily.InterNetwork,
+                    SocketType.Dgram, ProtocolType.Udp);
+                IPEndPoint endPoint = new
+                IPEndPoint(IPAddress.Parse(gwInfo.Address.ToString()), 1900);
+
+                client.SetSocketOption(SocketOptionLevel.Socket,
+                    SocketOptionName.ReceiveTimeout, 5000);
+
+                byte[] q = Encoding.ASCII.GetBytes(req);
+                client.SendTo(q, q.Length, SocketFlags.None, endPoint);
+                IPEndPoint sender = new IPEndPoint(IPAddress.Any, 0);
+                EndPoint senderEP = (EndPoint)sender;
+
+                byte[] data = new byte[1024];
+                int recv = client.ReceiveFrom(data, ref senderEP);
+                string queryResponse = "";
+                queryResponse = Encoding.ASCII.GetString(data);
+
+                DateTime start = DateTime.Now;
+
+                string resp = queryResponse;
+                if (resp.Contains("upnp:rootdevice"))
                 {
-                    _descUrl = resp;
-                    return true;
+                    resp = resp.Substring(resp.ToLower().IndexOf("location:") + 9);
+                    resp = resp.Substring(0, resp.IndexOf("\r")).Trim();
+                    if (!string.IsNullOrEmpty(ServiceUrl = GetServiceUrl(resp)))
+                    {
+                        DescUrl = resp;
+                        UPnPAvailable = true;
+                    }
                 }
+                UPnPAvailable = false;
+
+                Discovered = true;
+                return UPnPAvailable;
             }
-            return false;
         }
 
         private static string GetServiceUrl(string resp)
@@ -83,7 +131,7 @@ namespace SharpUPnP
             if (node == null)
                 return null;
             XmlNode eventnode = desc.SelectSingleNode("//tns:service[tns:serviceType=\"urn:schemas-upnp-org:service:WANIPConnection:1\"]/tns:eventSubURL/text()", nsMgr);
-            _eventUrl = CombineUrls(resp, eventnode.Value);
+            EventUrl = CombineUrls(resp, eventnode.Value);
             return CombineUrls(resp, node.Value);
         }
 
@@ -94,15 +142,25 @@ namespace SharpUPnP
             return resp.Substring(0, n) + p;
         }
 
+        /// <summary>
+        /// Forwards an external port to the same internal port
+        /// </summary>
+        /// <param name="port">The port to map (both external and internal)</param>
+        /// <param name="protocol">The protocol type to map</param>
+        /// <param name="description">The description of this mapping</param>
         public static void ForwardPort(int port, ProtocolType protocol, string description)
         {
-            if (string.IsNullOrEmpty(_serviceUrl))
-                throw new Exception("No UPnP service available or Discover() has not been called");
+            if (string.IsNullOrEmpty(ServiceUrl))
+            {
+                Discover();
+                if (string.IsNullOrEmpty(ServiceUrl))
+                    throw new Exception("No UPnP service available");
+            }
 
-            IPHostEntry ipEntry = Dns.GetHostByName(Dns.GetHostName());
+            IPHostEntry ipEntry = Dns.GetHostEntry(Dns.GetHostName());
             IPAddress addr = ipEntry.AddressList[0];
 
-            XmlDocument xdoc = SOAPRequest(_serviceUrl,
+            XmlDocument xdoc = SOAPRequest(ServiceUrl,
                 "<m:AddPortMapping xmlns:m=\"urn:schemas-upnp-org:service:WANIPConnection:1\"><NewRemoteHost xmlns:dt=\"urn:schemas-microsoft-com:datatypes\" dt:dt=\"string\"></NewRemoteHost><NewExternalPort xmlns:dt=\"urn:schemas-microsoft-com:datatypes\" dt:dt=\"ui2\">" +
                 port.ToString() + "</NewExternalPort><NewProtocol xmlns:dt=\"urn:schemas-microsoft-com:datatypes\" dt:dt=\"string\">" +
                 protocol.ToString().ToUpper() + "</NewProtocol><NewInternalPort xmlns:dt=\"urn:schemas-microsoft-com:datatypes\" dt:dt=\"ui2\">" +
@@ -114,10 +172,14 @@ namespace SharpUPnP
 
         public static void DeleteForwardingRule(int port, ProtocolType protocol)
         {
-            if (string.IsNullOrEmpty(_serviceUrl))
-                throw new Exception("No UPnP service available or Discover() has not been called");
+            if (string.IsNullOrEmpty(ServiceUrl))
+            {
+                Discover();
+                if (string.IsNullOrEmpty(ServiceUrl))
+                    throw new Exception("No UPnP service available");
+            }
 
-            XmlDocument xdoc = SOAPRequest(_serviceUrl,
+            XmlDocument xdoc = SOAPRequest(ServiceUrl,
             "<u:DeletePortMapping xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
             "<NewRemoteHost></NewRemoteHost>" +
             "<NewExternalPort>" + port.ToString() + "</NewExternalPort>" +
@@ -127,9 +189,9 @@ namespace SharpUPnP
 
         public static IPAddress GetExternalIP()
         {
-            if (string.IsNullOrEmpty(_serviceUrl))
+            if (string.IsNullOrEmpty(ServiceUrl))
                 throw new Exception("No UPnP service available or Discover() has not been called");
-            XmlDocument xdoc = SOAPRequest(_serviceUrl, "<u:GetExternalIPAddress xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
+            XmlDocument xdoc = SOAPRequest(ServiceUrl, "<u:GetExternalIPAddress xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
             "</u:GetExternalIPAddress>", "GetExternalIPAddress");
             XmlNamespaceManager nsMgr = new XmlNamespaceManager(xdoc.NameTable);
             nsMgr.AddNamespace("tns", "urn:schemas-upnp-org:device-1-0");
