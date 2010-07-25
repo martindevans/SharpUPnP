@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Xml;
+using System.Diagnostics;
 
 namespace SharpUPnP
 {
@@ -26,9 +27,9 @@ namespace SharpUPnP
             }
         }
 
-        public static string DescUrl { get; private set; }
-        public static string ServiceUrl { get; private set; }
-        public static string EventUrl { get; private set; }
+        private static string descUrl { get; private set; }
+        private static string serviceUrl { get; private set; }
+        private static string eventUrl { get; private set; }
 
         private static object discoveryLock = new object();
         public static bool Discovered
@@ -98,9 +99,9 @@ namespace SharpUPnP
                 {
                     resp = resp.Substring(resp.ToLower().IndexOf("location:") + 9);
                     resp = resp.Substring(0, resp.IndexOf("\r")).Trim();
-                    if (!string.IsNullOrEmpty(ServiceUrl = GetServiceUrl(resp)))
+                    if (!string.IsNullOrEmpty(serviceUrl = GetServiceUrl(resp)))
                     {
-                        DescUrl = resp;
+                        descUrl = resp;
                         UPnPAvailable = true;
                     }
                 }
@@ -131,7 +132,7 @@ namespace SharpUPnP
             if (node == null)
                 return null;
             XmlNode eventnode = desc.SelectSingleNode("//tns:service[tns:serviceType=\"urn:schemas-upnp-org:service:WANIPConnection:1\"]/tns:eventSubURL/text()", nsMgr);
-            EventUrl = CombineUrls(resp, eventnode.Value);
+            eventUrl = CombineUrls(resp, eventnode.Value);
             return CombineUrls(resp, node.Value);
         }
 
@@ -148,19 +149,12 @@ namespace SharpUPnP
         /// <param name="port">The port to map (both external and internal)</param>
         /// <param name="protocol">The protocol type to map</param>
         /// <param name="description">The description of this mapping</param>
-        public static void ForwardPort(int port, ProtocolType protocol, string description)
+        public static void CreateForwardingRule(int port, ProtocolType protocol, string description)
         {
-            if (string.IsNullOrEmpty(ServiceUrl))
-            {
-                Discover();
-                if (string.IsNullOrEmpty(ServiceUrl))
-                    throw new Exception("No UPnP service available");
-            }
-
             IPHostEntry ipEntry = Dns.GetHostEntry(Dns.GetHostName());
             IPAddress addr = ipEntry.AddressList[0];
 
-            XmlDocument xdoc = SOAPRequest(ServiceUrl,
+            XmlDocument xdoc = SOAPRequest(
                 "<m:AddPortMapping xmlns:m=\"urn:schemas-upnp-org:service:WANIPConnection:1\"><NewRemoteHost xmlns:dt=\"urn:schemas-microsoft-com:datatypes\" dt:dt=\"string\"></NewRemoteHost><NewExternalPort xmlns:dt=\"urn:schemas-microsoft-com:datatypes\" dt:dt=\"ui2\">" +
                 port.ToString() + "</NewExternalPort><NewProtocol xmlns:dt=\"urn:schemas-microsoft-com:datatypes\" dt:dt=\"string\">" +
                 protocol.ToString().ToUpper() + "</NewProtocol><NewInternalPort xmlns:dt=\"urn:schemas-microsoft-com:datatypes\" dt:dt=\"ui2\">" +
@@ -170,16 +164,14 @@ namespace SharpUPnP
                 "AddPortMapping");
         }
 
+        /// <summary>
+        /// Deletes the forwarding rule for the specific port
+        /// </summary>
+        /// <param name="port">The port.</param>
+        /// <param name="protocol">The protocol.</param>
         public static void DeleteForwardingRule(int port, ProtocolType protocol)
         {
-            if (string.IsNullOrEmpty(ServiceUrl))
-            {
-                Discover();
-                if (string.IsNullOrEmpty(ServiceUrl))
-                    throw new Exception("No UPnP service available");
-            }
-
-            XmlDocument xdoc = SOAPRequest(ServiceUrl,
+            XmlDocument xdoc = SOAPRequest(
             "<u:DeletePortMapping xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
             "<NewRemoteHost></NewRemoteHost>" +
             "<NewExternalPort>" + port.ToString() + "</NewExternalPort>" +
@@ -187,11 +179,14 @@ namespace SharpUPnP
             "</u:DeletePortMapping>", "DeletePortMapping");
         }
 
+        /// <summary>
+        /// Gets the external IP of the router
+        /// </summary>
+        /// <returns>External IP address of the UPnP device</returns>
+        /// <exception cref="UPnPException">Thrown if no UPnP service is available</exception>
         public static IPAddress GetExternalIP()
         {
-            if (string.IsNullOrEmpty(ServiceUrl))
-                throw new Exception("No UPnP service available or Discover() has not been called");
-            XmlDocument xdoc = SOAPRequest(ServiceUrl, "<u:GetExternalIPAddress xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
+            XmlDocument xdoc = SOAPRequest("<u:GetExternalIPAddress xmlns:u=\"urn:schemas-upnp-org:service:WANIPConnection:1\">" +
             "</u:GetExternalIPAddress>", "GetExternalIPAddress");
             XmlNamespaceManager nsMgr = new XmlNamespaceManager(xdoc.NameTable);
             nsMgr.AddNamespace("tns", "urn:schemas-upnp-org:device-1-0");
@@ -199,15 +194,39 @@ namespace SharpUPnP
             return IPAddress.Parse(IP);
         }
 
-        public static XmlDocument SOAPRequest(string url, string soap, string function)
+        /// <summary>
+        /// Checks that UPnP services are available
+        /// </summary>
+        /// <param name="getString">The get string.</param>
+        /// <exception cref="UPnPException">Thrown if no UPnP service is available</exception>
+        private static void CheckUPnPAvailable()
         {
+            Discover(false);
+
+            if (!UPnPAvailable)
+                throw new UPnPException("No UPnP Service available");
+
+            Debug.Assert(!string.IsNullOrEmpty(serviceUrl));
+        }
+
+        /// <summary>
+        /// Sends a SOAP request to the UPnP device
+        /// </summary>
+        /// <param name="soap">The SOAP Xml request to be sent</param>
+        /// <param name="function">The UPnP function to be performed</param>
+        /// <returns>The response</returns>
+        /// <exception cref="UPnPException">Thrown if no UPnP service is available</exception>
+        public static XmlDocument SOAPRequest(string soap, string function)
+        {
+            CheckUPnPAvailable();
+
             string req = "<?xml version=\"1.0\"?>" +
             "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
             "<s:Body>" +
             soap +
             "</s:Body>" +
             "</s:Envelope>";
-            WebRequest r = HttpWebRequest.Create(url);
+            WebRequest r = HttpWebRequest.Create(serviceUrl);
             r.Timeout = 10000;
             r.Method = "POST";
             byte[] b = Encoding.UTF8.GetBytes(req);
