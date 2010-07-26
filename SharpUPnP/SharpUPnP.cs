@@ -6,13 +6,14 @@ using System.Text;
 using System.Threading;
 using System.Xml;
 using System.Diagnostics;
+using System.Net.NetworkInformation;
 
 namespace SharpUPnP
 {
     /// <summary>
     /// Provides Universal Plug & Play operations for NAT
     /// </summary>
-    public class SharpUPnP
+    public class UPnP
     {
         private static long timeoutTicks = new TimeSpan(0, 0, 0, 3).Ticks;
         /// <summary>
@@ -84,35 +85,29 @@ namespace SharpUPnP
         {
             lock (discoveryLock)
             {
-                System.Net.NetworkInformation.NetworkInterface nic = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()[0];
+                NetworkInterface nic = NetworkInterface.GetAllNetworkInterfaces()[0];
+                GatewayIPAddressInformation gwInfo = nic.GetIPProperties().GatewayAddresses[0];                
 
-                System.Net.NetworkInformation.GatewayIPAddressInformation gwInfo = nic.GetIPProperties().GatewayAddresses[0];
-                Socket s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-                s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
+                Socket client = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                IPEndPoint endPoint = new IPEndPoint(IPAddress.Parse(gwInfo.Address.ToString()), 1900);
+
+                client.SetSocketOption(SocketOptionLevel.Socket,
+                    SocketOptionName.ReceiveTimeout, 5000);
+
                 string req = "M-SEARCH * HTTP/1.1\r\n" +
                 "HOST: " + gwInfo.Address.ToString() + ":1900\r\n" +
                 "ST:upnp:rootdevice\r\n" +
                 "MAN:\"ssdp:discover\"\r\n" +
                 "MX:3\r\n\r\n";
-                Socket client = new Socket(AddressFamily.InterNetwork,
-                    SocketType.Dgram, ProtocolType.Udp);
-                IPEndPoint endPoint = new
-                IPEndPoint(IPAddress.Parse(gwInfo.Address.ToString()), 1900);
 
-                client.SetSocketOption(SocketOptionLevel.Socket,
-                    SocketOptionName.ReceiveTimeout, 5000);
-
-                byte[] q = Encoding.ASCII.GetBytes(req);
-                client.SendTo(q, q.Length, SocketFlags.None, endPoint);
+                byte[] requestBytes = Encoding.ASCII.GetBytes(req);
+                client.SendTo(requestBytes, requestBytes.Length, SocketFlags.None, endPoint);
                 IPEndPoint sender = new IPEndPoint(IPAddress.Any, 0);
                 EndPoint senderEP = (EndPoint)sender;
 
                 byte[] data = new byte[1024];
                 int recv = client.ReceiveFrom(data, ref senderEP);
-                string queryResponse = "";
-                queryResponse = Encoding.ASCII.GetString(data);
-
-                DateTime start = DateTime.Now;
+                string queryResponse = Encoding.ASCII.GetString(data, 0, recv);
 
                 string resp = queryResponse;
                 if (resp.Contains("upnp:rootdevice"))
@@ -125,7 +120,8 @@ namespace SharpUPnP
                         uPnPAvailable = true;
                     }
                 }
-                uPnPAvailable = false;
+                else
+                    uPnPAvailable = false;
 
                 Discovered = true;
                 return UPnPAvailable;
